@@ -5,5 +5,5 @@ Precious Nwachokor pcn0031
 11584868
 
 Requires
-- node.js v14+
-- npm
+- python3
+- pip
