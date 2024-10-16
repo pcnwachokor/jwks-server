@@ -1,26 +1,64 @@
 const express = require('express');
-const { serveJWKS } = require('./keys');
-const { issueToken } = require('./auth');
-
+const jwt = require('jsonwebtoken');
+const base64url = require('base64url');  // for encoding base64 URL-safe
 const app = express();
-const PORT = 8080;
 
-//defined root route to handle requests to /
-app.get("/", (req, res) => {
-    res.send("JWKS Server is running.");
+// Secret key and base64 encoding
+const secretKey = '3ba010226cd84939b9eed91aa6bd9519';
+const secretKeyBytes = Buffer.from(secretKey, 'utf-8');
+const base64EncodedKey = base64url(secretKeyBytes);  // base64url encoding for the JWKS
+
+// Auth route
+app.post('/auth', (req, res) => {
+    const expired = req.query.expired !== undefined;  // Check if the "expired" query parameter is present
+
+    // Payload data
+    let body = {
+        Fullname: "username",
+        Password: "password",
+        iat: Math.floor(Date.now() / 1000),  // Issued at current time
+    };
+
+    if (expired) {
+        // Expired 10 seconds ago
+        body.exp = Math.floor(Date.now() / 1000) - 10;  // Expiration timestamp (10 seconds ago)
+        var token = jwt.sign(body, secretKey, { algorithm: 'HS256', header: { kid: '3' } });  // 'kid' is '3' when expired
+    } else {
+        // Expires in 1 hour
+        body.exp = Math.floor(Date.now() / 1000) + 60 * 60;  // 1 hour expiration
+        var token = jwt.sign(body, secretKey, { algorithm: 'HS256', header: { kid: '1' } });
+    }
+
+    // Return the token as JSON
+    res.json({ token });
 });
 
-// Serve the JWKS route
-app.get('/jwks', serveJWKS);
+// JWKS endpoint
+app.get('/.well-known/jwks.json', (req, res) => {
+    // JWKS data
+    const jwksData = {
+        keys: [
+            {
+                kty: "oct",
+                alg: "HS256",
+                k: '3ba010226cd84939b9eed91aa6bd9519',
+                kid: "2"
+            },
+            {
+                kty: "oct",
+                alg: "HS256",
+                k: base64EncodedKey,
+                kid: "1",
+                use: "sig"
+            }
+        ]
+    };
 
-// Auth route to return a signed JWT
-app.post('/auth', issueToken);
+    // Return the JWKS data as JSON
+    res.json(jwksData);
+});
 
 // Start the server
-if(process.env.NODE_ENV !== 'test') {
-    app.listen(PORT, () => {
-        console.log(`Server started on http://localhost:${PORT}`);
-    });
-}
-
-module.exports = app;
+app.listen(8080, '127.0.0.1', () => {
+    console.log('Server running on http://127.0.0.1:8080');
+});

@@ -1,50 +1,68 @@
 const request = require('supertest');
-const app = require('./app'); // Import the Express app
-const jwt = require('jsonwebtoken'); // For decoding JWTs
+const jwt = require('jsonwebtoken');
+const app = require('./app');  // Assuming app.js contains the Express app
+const { expect } = require('chai');
 
-describe('JWKS Server Tests', function () {
-    this.timeout(10000); // Increase timeout to 10 seconds to ensure async completion
+// Set up secret key for decoding JWTs
+const secretKey = '3ba010226cd84939b9eed91aa6bd9519';
 
-    it('should return JWKS with keys', (done) => {
-        request(app)
-            .get('/jwks')
-            .expect('Content-Type', /json/)
-            .expect(200)
-            .end((err, res) => {
-                if (err) return done(err);
-                done();
-            });
+// Test for valid JWT authentication
+describe('JWT Authentication Tests', () => {
+
+    it('should return a valid JWT', async () => {
+        const response = await request(app).post('/auth');
+        expect(response.statusCode).to.equal(200);
+        const token = response.body.token;
+        const decoded = jwt.decode(token);
+        expect(decoded).to.have.property('exp');
+        expect(decoded.exp).to.be.above(Math.floor(Date.now() / 1000));  // Token should not be expired
     });
 
-    it('should return a valid JWT on POST /auth', function (done) {
-        request(app)
-            .post('/auth')
-            .expect(200)
-            .expect('Content-Type', /json/)
-            .end((err, res) => {
-                if (err) return done(err);
-                const token = res.body.token;
-                if (!token) return done(new Error('Token not found'));
-                done();
-            });
+    // Test to ensure the JWT returned is expired
+    it('should return an expired JWT', async () => {
+        const response = await request(app).post('/auth?expired=true');
+        const token = response.body.token;
+
+        const decoded = jwt.decode(token, { complete: true });
+        expect(decoded.payload.exp).to.not.be.null;
+        const expiredTokenData = jwt.decode(token, { complete: true });
+        expect(expiredTokenData.payload.exp).to.be.below(Math.floor(Date.now() / 1000));  // Token is expired
     });
 
-    it('should return an expired JWT if expired=true', function (done) {
-        request(app)
-            .post('/auth?expired=true')
-            .expect(200)
-            .expect('Content-Type', /json/)
-            .end((err, res) => {
-                if (err) return done(err);
-                const token = res.body.token;
-                if (!token) return done(new Error('Token not found'));
-                
-                // Decode the token to check if it's expired
-                const decoded = jwt.decode(token);
-                if (decoded.exp && Date.now() / 1000 < decoded.exp) {
-                    return done(new Error('Token is not expired'));
-                }
-                done();
-            });
+    // Test that ensures valid JWT's `kid` is found in the JWKS
+    it('should have a valid JWK kid found in JWKS', async () => {
+        const authResponse = await request(app).post('/auth');
+        const token = authResponse.body.token;
+
+        const header = jwt.decode(token, { complete: true }).header;
+        const jwksResponse = await request(app).get('/.well-known/jwks.json');
+        const jwksKeys = jwksResponse.body.keys;
+
+        const kidList = jwksKeys.map(key => key.kid);
+        expect(kidList).to.include(header.kid);  // `kid` should be found in the JWKS
     });
+
+    // Test that expired JWT's `kid` is not found in the JWKS
+    it('should not have an expired JWK kid found in JWKS', async () => {
+        const authResponse = await request(app).post('/auth?expired=true');
+        const token = authResponse.body.token;
+
+        const header = jwt.decode(token, { complete: true }).header;
+        const jwksResponse = await request(app).get('/.well-known/jwks.json');
+        const jwksKeys = jwksResponse.body.keys;
+
+        const kidList = jwksKeys.map(key => key.kid);
+        expect(kidList).to.not.include(header.kid);  // `kid` should not be in the JWKS for expired token
+    });
+
+    // Test to make sure JWT `exp` claim is in the past for expired tokens
+    it('should have JWT `exp` in the past for expired tokens', async () => {
+        const response = await request(app).post('/auth?expired=true');
+        const token = response.body.token;
+
+        const decoded = jwt.decode(token, { complete: true });
+        const expTimestamp = decoded.payload.exp;
+        expect(expTimestamp).to.be.below(Math.floor(Date.now() / 1000));  // The expiration timestamp is in the past
+    });
+
 });
